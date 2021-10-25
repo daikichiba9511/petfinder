@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "petfinder"
+version = "0.1.0"
+description = ""
+authors = ["daikichiba9511 <daikichiba.tech.ml@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = "~3.7"
+scikit-learn = "^1.0"
+numpy = "^1.21.2"
+pandas = "<1.3.4"
+pytorch-lightning = "^1.4.9"
+grad-cam = "^1.3.1"
+ttach = "^0.0.3"
+python-box = "^5.4.1"
+timm = "^0.4.12"
+
+[tool.poetry.dev-dependencies]
+jupytext = "^1.11.4"
+black = "^21.9b0"
+flake8 = "^3.9.2"
+mypy = "^0.910"
+isort = "^5.9.3"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
