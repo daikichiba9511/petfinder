@@ -1,9 +1,7 @@
 """ exp000
 
-* hyblid Swin transfomerを試す
-
 Ref
-* https://www.kaggle.com/debarshichanda/pytorch-hybrid-swin-transformer-cnn
+* https://www.kaggle.com/phalanx/train-swin-t-pytorch-lightning
 """
 
 import os
@@ -40,7 +38,10 @@ sns.set()
 warnings.filterwarnings("ignore")
 
 config = {
+    "expname": os.path.basename(__file__).split(".")[0],
     "train": True,
+    "train_epoch": [0, 1, 2, 3, 4],
+    # "train_epoch": [0],
     "inference": True,
     "device": "cuda",
     "seed": 2021,
@@ -55,9 +56,9 @@ config = {
         "num_sanity_val_steps": 0,
         "resume_from_checkpoint": None,
     },
-    "transform": {"name": "get_default_transforms", "image_size": 448},
+    "transform": {"name": "get_default_transforms", "image_size": 224},
     "train_loader": {
-        "batch_size": 16,
+        "batch_size": 32,
         "shuffle": True,
         "num_workers": 4,
         "pin_memory": False,
@@ -71,21 +72,16 @@ config = {
         "drop_last": False,
     },
     "test_loader": {
-        "batch_size": 64,
+        "batch_size": 32,
         "shuffle": False,
         "num_workers": 4,
         "pin_memory": False,
         "drop_last": False,
     },
-    "model": {
-        "name": "Hyblid_Swin_Transformer_with_CNN",
-        "backbone_name": "swin_base_patch4_window7_224",
-        "embedder": "tf_efficientnet_b4_ns",
-        "output_dim": 1,
-    },
+    "model": {"name": "swin_base_patch4_window7_224", "output_dim": 1},
     "optimizer": {
         "name": "optim.AdamW",
-        "params": {"lr": 1e-4},
+        "params": {"lr": 1e-5},
     },
     "scheduler": {
         "name": "optim.lr_scheduler.CosineAnnealingWarmRestarts",
@@ -168,14 +164,20 @@ def get_default_transforms():
         "train": T.Compose(
             [
                 T.RandomHorizontalFlip(),
-                # T.RandomVerticalFlip(),
-                # T.RandomAffine(15, translate=(0.1, 0.1), scale=(0.9, 1.1)),
-                # T.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1),
-                # T.ConvertImageDtype(torch.float),
+                T.RandomVerticalFlip(),
+                T.RandomAffine(15, translate=(0.1, 0.1), scale=(0.9, 1.1)),
+                T.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1),
+                T.ConvertImageDtype(torch.float),
                 T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-            ],
+            ]
         ),
         "val": T.Compose(
+            [
+                T.ConvertImageDtype(torch.float),
+                T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            ]
+        ),
+        "test": T.Compose(
             [
                 T.ConvertImageDtype(torch.float),
                 T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
@@ -199,66 +201,6 @@ def mixup(x: torch.Tensor, y: torch.Tensor, alpha: float = 1.0):
     return mixed_x, target_a, target_b, lam
 
 
-class HybridEmbed(nn.Module):
-    """CNN Feature Map Embedding
-    Extract feature map from CNN, flatten, project to embedding dim.
-    """
-
-    def __init__(
-        self,
-        backbone,
-        img_size=224,
-        patch_size=1,
-        feature_size=None,
-        in_chans=3,
-        embed_dim=768,
-    ):
-        super().__init__()
-        assert isinstance(backbone, nn.Module)
-        img_size = (img_size, img_size)
-        patch_size = (patch_size, patch_size)
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.backbone = backbone
-        if feature_size is None:
-            with torch.no_grad():
-                # NOTE Most reliable way of determining output dims is to run forward pass
-                training = backbone.training
-                if training:
-                    backbone.eval()
-                o = self.backbone(torch.zeros(1, in_chans, img_size[0], img_size[1]))
-                if isinstance(o, (list, tuple)):
-                    o = o[-1]  # last feature if backbone outputs list/tuple of features
-                feature_size = o.shape[-2:]
-                feature_dim = o.shape[1]
-                backbone.train(training)
-        else:
-            feature_size = (feature_size, feature_size)
-            if hasattr(self.backbone, "feature_info"):
-                feature_dim = self.backbone.feature_info.channels()[-1]
-            else:
-                feature_dim = self.backbone.num_features
-        assert (
-            feature_size[0] % patch_size[0] == 0
-            and feature_size[1] % patch_size[1] == 0
-        )
-        self.grid_size = (
-            feature_size[0] // patch_size[0],
-            feature_size[1] // patch_size[1],
-        )
-        self.num_patches = self.grid_size[0] * self.grid_size[1]
-        self.proj = nn.Conv2d(
-            feature_dim, embed_dim, kernel_size=patch_size, stride=patch_size
-        )
-
-    def forward(self, x):
-        x = self.backbone(x)
-        if isinstance(x, (list, tuple)):
-            x = x[-1]  # last feature if backbone outputs list/tuple of features
-        x = self.proj(x).flatten(2).transpose(1, 2)
-        return x
-
-
 class Model(pl.LightningModule):
     def __init__(self, cfg):
         super().__init__()
@@ -270,17 +212,12 @@ class Model(pl.LightningModule):
 
     def __build_model(self):
         self.backbone = create_model(
-            self.cfg.model.backbone_name, pretrained=True, num_classes=0, in_chans=3
+            self.cfg.model.name, pretrained=True, num_classes=0, in_chans=3
         )
-        self.embedder = create_model(
-            self.cfg.model.embedder, feature_only=True, out_indices=[2], pretrained=True
+        num_features = self.backbone.num_features
+        self.fc = nn.Sequential(
+            nn.Dropout(0.5), nn.Linear(num_features, self.cfg.model.output_dim)
         )
-        self.backbone.patch_embed = HybridEmbed(
-            self.embedder, img_size=self.config.transform.image_size
-        )
-        self.num_features = self.backbone.head.in_feature
-        self.backbone.reset_classifier(0)
-        self.fc = nn.Linear(self.num_features, self.cfg.model.output_dim)
 
     def forward(self, x):
         f = self.backbone(x)
@@ -374,6 +311,8 @@ def train(config):
     )
 
     for fold, (train_idx, val_idx) in enumerate(skf.split(df["Id"], df["Pawpularity"])):
+        if fold not in config.train_epoch:
+            continue
         print("#" * 8 + f"  Fold: {fold}  " + "#" * 8)
         train_df = df.loc[train_idx].reset_index(drop=True)
         val_df = df.loc[val_idx].reset_index(drop=True)
@@ -389,7 +328,9 @@ def train(config):
             mode="min",
             save_last=False,
         )
-        logger = TensorBoardLogger(config.model.name)
+        logger = TensorBoardLogger(
+            save_dir="./output/tb_logs", name=f"{config.model.name}"
+        )
 
         trainer = pl.Trainer(
             logger=logger,
@@ -413,10 +354,10 @@ def reshape_transform(tensor, height=7, width=7):
     return result
 
 
-def class_activation_map(train_df, val_df, fold: int, config: Box):
+def class_activation_map(train_df, val_df, fold: int):
     model = Model(config).to(config.device).eval()
     model.load_state_dict(
-        torch.load(f"./output{config.model.name}/best_loss_{fold}.ckpt")["state_dict"]
+        torch.load(f"./output/{config.model.name}/best_loss_{fold}.ckpt")["state_dict"]
     )
     config.val_loader.batch_size = 16
     datamodule = PetfinderDataModule(train_df, val_df, config)
@@ -438,8 +379,8 @@ def class_activation_map(train_df, val_df, fold: int, config: Box):
     plt.savefig(f"./output/{config.model.name}/class_activation_map.png")
 
 
-def visualize_result():
-    path = glob(f"./output/{config.model.name}/events*")[0]
+def visualize_result(config):
+    path = glob(f"./output/tb_logs/{config.model.name}/*")[-1]
     event_acc = EventAccumulator(path, size_guidance={"scalars": 0})
     event_acc.Reload()
 
@@ -468,43 +409,58 @@ def visualize_result():
     plt.show()
 
 
-def predict(model, test_dataloader, config):
+def predict(model, test_dataloader, config, transform):
     preds = []
     for batch in tqdm(test_dataloader):
+        img = batch.to(config.device)
+        img = transform(img)
+
         with torch.inference_mode():
-            logits = model(batch)
-        preds.append(logits.cpu().detach().numpy())
+            logits = model(img)
+        preds.append(logits.sigmoid().cpu().detach().numpy() * 100.0)
     preds = np.concatenate(preds)
-    return preds
+    return preds.reshape(-1)
 
 
 def main():
     if config.train:
         train(config)
-        visualize_result()
+        visualize_result(config)
 
     if config.inference:
         sub = []
         test_df = pd.read_csv(os.path.join(config.root, "test.csv"))
+        test_df["Id"] = test_df["Id"].apply(
+            lambda x: os.path.join(config.root, "test", x + ".jpg")
+        )
         test_dataset = PetfinderDataset(
             df=test_df, image_size=config.transform.image_size
         )
         for fold in range(config.n_splits):
-            print("#" * 8 + f"  Fold: {fold}  " + "#" * 8)
+            print("\n" + "#" * 8 + f"  Fold: {fold}  " + "#" * 8 + "\n")
             model = Model(config).to(config.device).eval()
             model.load_state_dict(
                 torch.load(
                     f"./output/{config.model.name}/best_loss_{fold}.ckpt",
-                    device=config.device,
+                    map_location=config.device,
                 )["state_dict"]
             )
 
             test_dataloader = DataLoader(test_dataset, **config.test_loader)
-            predicts = predict(model, test_dataloader, config)
+            predicts = predict(
+                model,
+                test_dataloader,
+                config,
+                transform=get_default_transforms()["test"],
+            )
             sub.append(predicts)
 
-        test_df["Pawpularity"] = np.mean(sub, axis=1)
-        submission = test_df[["ID", "Pawpularity"]]
+        print(np.asarray(sub).shape)
+        test_df["Pawpularity"] = np.mean(sub, axis=0)
+        print(test_df.head())
+        test_df["Id"] = test_df["Id"].apply(lambda x: os.path.basename(x).split(".")[0])
+        print(test_df.head())
+        submission = test_df[["Id", "Pawpularity"]]
         submission.to_csv("submission.csv", index=False)
 
 
