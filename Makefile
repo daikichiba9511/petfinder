@@ -10,10 +10,18 @@ develop: # usually use this command
 	${POETRY} \
 	&& poetry install \
 
+
 develop_no_venv:
 	${POETRY} \
 	&& poetry config virtualenvs.create false --local \
-	&& poetry install
+	&& poetry install \
+	&& poe force-cuda11
+
+set_tpu:
+	${POETRY} \
+	&& poetry config virtualenvs.create false --local \
+	&& poetry install \
+	&& poetry run python3 -m pip install cloud-tpu-client==0.10 https://storage.googleapis.com/tpu-pytorch/wheels/torch_xla-1.9-cp37-cp37m-linux_x86_64.whl \
 
 pip_export:
 	pip3 freeze > requirements.txt
@@ -23,3 +31,7 @@ poetry_export:
 
 develop_by_requirements:
 	for package in $(cat requirements.txt); do poetry add "${package}"; done
+
+update_datasets:
+	zip -r output/sub.zip output/sub
+	kaggle datasets version -p ./output/sub -m "Updated data"

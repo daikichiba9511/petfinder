@@ -8,6 +8,7 @@ import os
 import warnings
 from glob import glob
 from pprint import pprint
+from typing import List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -40,45 +41,46 @@ warnings.filterwarnings("ignore")
 config = {
     "expname": os.path.basename(__file__).split(".")[0],
     "train": True,
-    "train_epoch": [0, 1, 2, 3, 4],
+    "train_epoch": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
     # "train_epoch": [0],
     "inference": True,
     "device": "cuda",
     "seed": 2021,
-    "root": "./input/petfinder-pawpularity-score/",
-    "n_splits": 5,
+    "root": "/content/input/petfinder-pawpularity-score/",
+    "n_splits": 10,
     "epoch": 20,
     "trainer": {
         "gpus": 1,
-        "accumulate_grad_batches": 1,
+        "accumulate_grad_batches": 16,
         "progress_bar_refresh_rate": 1,
         "fast_dev_run": False,
         "num_sanity_val_steps": 0,
         "resume_from_checkpoint": None,
+        # "precision": 16,
     },
-    "transform": {"name": "get_default_transforms", "image_size": 224},
+    "transform": {"name": "get_default_transforms", "image_size": 384},
     "train_loader": {
-        "batch_size": 32,
+        "batch_size": 4,
         "shuffle": True,
         "num_workers": 4,
         "pin_memory": False,
         "drop_last": True,
     },
     "val_loader": {
-        "batch_size": 32,
+        "batch_size": 4,
         "shuffle": False,
         "num_workers": 4,
         "pin_memory": False,
         "drop_last": False,
     },
     "test_loader": {
-        "batch_size": 32,
+        "batch_size": 4,
         "shuffle": False,
         "num_workers": 4,
         "pin_memory": False,
         "drop_last": False,
     },
-    "model": {"name": "swin_base_patch4_window7_224", "output_dim": 1},
+    "model": {"name": "swin_large_patch4_window12_384_in22k", "output_dim": 1},
     "optimizer": {
         "name": "optim.AdamW",
         "params": {"lr": 1e-5},
@@ -274,7 +276,7 @@ class Model(pl.LightningModule):
     ):
         cam = GradCAMPlusPlus(
             model=self,
-            target_layer=target_layer,
+            target_layers=[target_layer],
             use_cuda=self.cfg.trainer.gpus,
             reshape_transform=reshape_transform,
         )
@@ -340,13 +342,17 @@ def train(config):
         )
         trainer.fit(model, datamodule=datamodule)
 
-        class_activation_map(train_df, val_df, fold)
+        # analysis of model
+        # class_activation_map(train_df, val_df, fold)
+        visualize_result(config, fold)
+
+        torch.cuda.empty_cache()
 
 
 #######################
 # Class Activation Map
 #######################
-def reshape_transform(tensor, height=7, width=7):
+def reshape_transform(tensor, height=12, width=12):
     result = tensor.reshape(tensor.size(0), height, width, tensor.size(2))
 
     # like in CNNs.
@@ -376,11 +382,12 @@ def class_activation_map(train_df, val_df, fold: int):
         plt.imshow(visualization)
         plt.title(f"pred: {pred:.1f} label: {label}")
         plt.axis("off")
-    plt.savefig(f"./output/{config.model.name}/class_activation_map.png")
+    plt.savefig(f"./output/{config.model.name}/class_activation_map_{it}.png")
 
 
-def visualize_result(config):
+def visualize_result(config, fold: int):
     path = glob(f"./output/tb_logs/{config.model.name}/*")[-1]
+    print(path)
     event_acc = EventAccumulator(path, size_guidance={"scalars": 0})
     event_acc.Reload()
 
@@ -405,8 +412,20 @@ def visualize_result(config):
     plt.ylabel("rmse")
     plt.xlabel("epoch")
     plt.title("train/val rmse")
-    plt.savefig(f"./output/{config.model.name}/loss.png")
+    plt.savefig(f"./output/{config.model.name}/loss_{fold}.png")
     plt.show()
+
+    # save cv value
+    save_path = f"./output/{config.model.name}/{config.expname}"
+    if not os.path.exists(save_path):
+        os.path.mkdir(save_path)
+    save_path = os.path.join(save_path, "cv_results.csv")
+    if fold == 0:
+        cv_df = pd.DataFrame({"fold_0": min(scalars["val_loss"])})
+    else:
+        cv_df = pd.read_csv(save_path)
+        cv_df[f"fold_{fold}"] = min(scalars["val_loss"])
+    cv_df.to_csv(save_path, index=False)
 
 
 def predict(model, test_dataloader, config, transform):
@@ -422,10 +441,33 @@ def predict(model, test_dataloader, config, transform):
     return preds.reshape(-1)
 
 
-def main():
+def update_config(config):
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train_fold", default=-1, type=int, nargs="*")
+    parser.add_argument("--tpu")
+    parser.add_argument("--tpu_cores", default=-10, type=int)
+    args = parser.parse_args()
+
+    if args.train_fold != -1:
+        assert isinstance(args.train_fold, List)
+        assert isinstance(args.train_fold[0], int)
+        config["train_epoch"] = args.train_fold
+        print("train_epoch is specified: ", config["train_epoch"])
+
+    if args.tpu:
+        config["trainer"]["tpu_cores"] = args.tpu_cores
+        config["trainer"].pop("gpus")
+        print("tpu is specified with the number of", config["trainer"]["tpu_cores"])
+
+    return config
+
+
+def main(config):
+    config = update_config(config)
     if config.train:
         train(config)
-        visualize_result(config)
 
     if config.inference:
         sub = []
@@ -465,4 +507,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(config)
