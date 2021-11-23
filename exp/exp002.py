@@ -1,7 +1,8 @@
-""" exp001
+""" exp002
 
 Ref
 * https://www.kaggle.com/phalanx/train-swin-t-pytorch-lightning
+* https://www.kaggle.com/cdeotte/rapids-svr-boost-17-8
 """
 
 import os
@@ -29,7 +30,8 @@ from pytorch_lightning.callbacks.progress import ProgressBarBase
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.utilities.seed import seed_everything
 from sklearn.model_selection import StratifiedKFold
-from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+from tensorboard.backend.event_processing.event_accumulator import \
+    EventAccumulator
 from timm import create_model
 from torch.utils.data import DataLoader, Dataset
 from torchvision.io import read_image
@@ -41,14 +43,14 @@ warnings.filterwarnings("ignore")
 config = {
     "expname": os.path.basename(__file__).split(".")[0],
     "train": True,
-    "train_epoch": [0, 1, 2, 3, 4],
+    "train_epoch": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
     # "train_epoch": [0],
-    "inference": False,
+    "inference": True,
     "device": "cuda",
     "seed": 2021,
     "root": "/content/input/petfinder-pawpularity-score/",
-    "n_splits": 5,
-    "epoch": 40,
+    "n_splits": 10,
+    "epoch": 20,
     "trainer": {
         "gpus": 1,
         "accumulate_grad_batches": 16,
@@ -58,7 +60,7 @@ config = {
         "resume_from_checkpoint": None,
         # "precision": 16,
     },
-    "transform": {"name": "get_default_transforms", "image_size": 256},
+    "transform": {"name": "get_default_transforms", "image_size": 384},
     "train_loader": {
         "batch_size": 4,
         "shuffle": True,
@@ -80,16 +82,16 @@ config = {
         "pin_memory": False,
         "drop_last": False,
     },
-    "model": {"name": "dolgnet_768", "hidden_dim": 2048, "output_dim": 1},
+    "model": {"name": "swin_large_patch4_window12_384_in22k", "output_dim": 1},
     "optimizer": {
         "name": "optim.AdamW",
-        "params": {"lr": 5e-5, "weight_decay": 5e-5},
+        "params": {"lr": 1e-5},
     },
     "scheduler": {
         "name": "optim.lr_scheduler.CosineAnnealingWarmRestarts",
         "params": {
-            "T_0": 40,
-            "eta_min": 1e-6,
+            "T_0": 20,
+            "eta_min": 1e-4,
         },
     },
     "loss": "nn.BCEWithLogitsLoss",
@@ -203,150 +205,7 @@ def mixup(x: torch.Tensor, y: torch.Tensor, alpha: float = 1.0):
     return mixed_x, target_a, target_b, lam
 
 
-class MultiAtrous(nn.Module):
-    def __init__(self, in_channel, out_channel, size, dilation_rates=[3, 6, 9]):
-        super().__init__()
-        self.dilated_convs = [
-            nn.Conv2d(
-                in_channel,
-                int(out_channel / 4),
-                kernel_size=3,
-                dilation=rate,
-                padding=rate,
-            )
-            for rate in dilation_rates
-        ]
-        self.gap_branch = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(in_channel, int(out_channel / 4), kernel_size=1),
-            nn.ReLU(),
-            nn.Upsample(size=(size, size), mode="bilinear"),
-        )
-        self.dilated_convs.append(self.gap_branch)
-        self.dilated_convs = nn.ModuleList(self.dilated_convs)
-
-    def forward(self, x):
-        local_feat = []
-        for dilated_conv in self.dilated_convs:
-            local_feat.append(dilated_conv(x))
-        local_feat = torch.cat(local_feat, dim=1)
-        return local_feat
-
-
-class DolgLocalBranch(nn.Module):
-    def __init__(self, in_channel, out_channel, img_size, hidden_channel=2048):
-        super().__init__()
-        self.multi_atrous = MultiAtrous(
-            in_channel=in_channel, out_channel=out_channel, size=int(img_size / 8)
-        )
-        self.conv1x1_1 = nn.Conv2d(hidden_channel, out_channel, kernel_size=1)
-        self.conv1x1_2 = nn.Conv2d(out_channel, out_channel, kernel_size=1, bias=False)
-        self.conv1x1_3 = nn.Conv2d(out_channel, out_channel, kernel_size=1)
-
-        self.relu = nn.ReLU()
-        self.bn = nn.BatchNorm2d(out_channel)
-        self.softplus = nn.Softplus()
-
-    def forward(self, x):
-        local_feat = self.multi_atrous(x)
-
-        local_feat = self.conv1x1_1(local_feat)
-        local_feat = self.relu(local_feat)
-        local_feat = self.conv1x1_2(local_feat)
-        local_feat = self.bn(local_feat)
-
-        attention_map = self.relu(local_feat)
-        attention_map = self.conv1x1_3(attention_map)
-        attention_map = self.softplus(attention_map)
-
-        local_feat = F.normalize(local_feat, p=2, dim=1)
-        local_feat = local_feat * attention_map
-
-        return local_feat
-
-
-class OrthogonalFusion(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, local_feat, global_feat):
-        global_feat_norm = torch.norm(global_feat, p=2, dim=1)
-        projection = torch.bmm(
-            global_feat.unsqueeze(1), torch.flatten(local_feat, start_dim=2)
-        )
-        projection = torch.bmm(global_feat.unsqueeze(2), projection).view(
-            local_feat.size()
-        )
-        projection = projection / (global_feat_norm * global_feat_norm).view(
-            -1, 1, 1, 1
-        )
-        orthogonal_comp = local_feat - projection
-        global_feat = global_feat.unsqueeze(-1).unsqueeze(-1)
-        return torch.cat(
-            [global_feat.expand(orthogonal_comp.size()), orthogonal_comp], dim=1
-        )
-
-
-class GeM(nn.Module):
-    def __init__(self, p=3, eps=1e-6):
-        super().__init__()
-        self.p = nn.Parameter(torch.ones(1) * p)
-        self.eps = eps
-
-    def forward(self, x):
-        return self.gem(x, p=self.p, eps=self.eps)
-
-    def gem(self, x, p=3, eps=1e-6):
-        return F.avg_pool2d(x.clamp(min=eps).pow(p), (x.size(-2), x.size(-1))).pow(
-            1.0 / p
-        )
-
-    def __repr__(self):
-        return (
-            self.__class__.__name__
-            + "("
-            + "p="
-            + "{:.4f}".format(self.p.data.tolist()[0])
-            + ", "
-            + "eps="
-            + str(self.eps)
-            + ")"
-        )
-
-
-class DolgNet(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, img_size):
-        super().__init__()
-        self.cnn = create_model(
-            "resnet101",
-            pretrained=True,
-            features_only=True,
-            in_chans=input_dim,
-            out_indices=(2, 3),
-        )
-        self.orthogonal_fusion = OrthogonalFusion()
-        self.local_branch = DolgLocalBranch(512, hidden_dim, img_size=img_size)
-        self.gap = nn.AdaptiveAvgPool2d(1)
-        self.gem_pool = GeM()
-        self.fc_1 = nn.Linear(1024, hidden_dim)
-        self.fc_2 = nn.Linear(int(2 * hidden_dim), output_dim)
-
-    def forward(self, x):
-        output = self.cnn(x)
-
-        local_feat = self.local_branch(output[0])  # ,hidden_channel,16,16
-        global_feat = self.fc_1(self.gem_pool(output[1]).squeeze())  # ,1024
-
-        feat = self.orthogonal_fusion(local_feat, global_feat)
-        feat = self.gap(feat).squeeze()
-        feat = self.fc_2(feat)
-
-        return feat
-
-
 class Model(pl.LightningModule):
-    """DOLG Network"""
-
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
@@ -356,15 +215,17 @@ class Model(pl.LightningModule):
         self.save_hyperparameters(cfg)
 
     def __build_model(self):
-        self._net = DolgNet(
-            input_dim=3,
-            hidden_dim=self.cfg.model.hidden_dim,
-            output_dim=self.cfg.model.output_dim,
-            img_size=self.cfg.transform.image_size,
+        self.backbone = create_model(
+            self.cfg.model.name, pretrained=True, num_classes=0, in_chans=3
+        )
+        num_features = self.backbone.num_features
+        self.fc = nn.Sequential(
+            nn.Dropout(0.5), nn.Linear(num_features, self.cfg.model.output_dim)
         )
 
-    def forward(self, x):
-        out = self._net(x)
+    def forward(self, image, features):
+        f = self.backbone(image)
+        out = self.fc(f)
         return out
 
     def training_step(self, batch, batch_idx):
@@ -478,7 +339,7 @@ def train(config):
         trainer = pl.Trainer(
             logger=logger,
             max_epochs=config.epoch,
-            callbacks=[lr_monitor, loss_checkpoint],
+            callbacks=[lr_monitor, loss_checkpoint, earystopping],
             **config.trainer,
         )
         trainer.fit(model, datamodule=datamodule)
@@ -562,7 +423,7 @@ def visualize_result(config, fold: int):
         os.makedirs(save_path, exist_ok=True)
     save_path = os.path.join(save_path, "cv_results.csv")
     if fold == 0:
-        cv_df = pd.DataFrame({"fold_0": [min(scalars["val_loss"])]})
+        cv_df = pd.DataFrame({"fold_0": min(scalars["val_loss"])})
     else:
         cv_df = pd.read_csv(save_path)
         cv_df[f"fold_{fold}"] = min(scalars["val_loss"])
