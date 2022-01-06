@@ -6,6 +6,7 @@ Ref
 """
 
 import os
+import gc
 import warnings
 from glob import glob
 from pprint import pprint
@@ -22,6 +23,9 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torchvision.transforms as T
 from box import Box
+from cuml.svm import SVR
+from joblib import dump, load
+from numpy.core.arrayprint import _get_format_function
 from pytorch_grad_cam import GradCAMPlusPlus
 from pytorch_grad_cam.utils.image import show_cam_on_image
 from pytorch_lightning import LightningDataModule, LightningModule, callbacks
@@ -30,8 +34,7 @@ from pytorch_lightning.callbacks.progress import ProgressBarBase
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.utilities.seed import seed_everything
 from sklearn.model_selection import StratifiedKFold
-from tensorboard.backend.event_processing.event_accumulator import \
-    EventAccumulator
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 from timm import create_model
 from torch.utils.data import DataLoader, Dataset
 from torchvision.io import read_image
@@ -45,7 +48,7 @@ config = {
     "train": True,
     "train_epoch": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
     # "train_epoch": [0],
-    "inference": True,
+    "inference": False,
     "device": "cuda",
     "seed": 2021,
     "root": "/content/input/petfinder-pawpularity-score/",
@@ -65,24 +68,25 @@ config = {
         "batch_size": 4,
         "shuffle": True,
         "num_workers": 4,
-        "pin_memory": False,
+        "pin_memory": True,
         "drop_last": True,
     },
     "val_loader": {
         "batch_size": 4,
         "shuffle": False,
         "num_workers": 4,
-        "pin_memory": False,
+        "pin_memory": True,
         "drop_last": False,
     },
     "test_loader": {
         "batch_size": 4,
         "shuffle": False,
         "num_workers": 4,
-        "pin_memory": False,
+        "pin_memory": True,
         "drop_last": False,
     },
     "model": {"name": "swin_large_patch4_window12_384_in22k", "output_dim": 1},
+    "svr": {"C": 1.0, "degree": 3, "gamma": "scale", "epsilon": 0.1},
     "optimizer": {
         "name": "optim.AdamW",
         "params": {"lr": 1e-5},
@@ -98,7 +102,6 @@ config = {
 }
 
 config = Box(config)
-pprint(config)
 
 torch.autograd.set_detect_anomaly(True)
 seed_everything(config.seed)
@@ -114,6 +117,7 @@ class PetfinderDataset(Dataset):
         if "Pawpularity" in df.keys():
             self._y = df["Pawpularity"].values
         self._transform = T.Resize([image_size, image_size])
+        self.dense_features = self._build_features(df)
 
     def __len__(self):
         return len(self._X)
@@ -122,10 +126,30 @@ class PetfinderDataset(Dataset):
         image_path = self._X[idx]
         image = read_image(image_path)
         image = self._transform(image)
+
+        features = self.dense_features[idx, :]
+        features = torch.tensor(features, dtype=image.dtype)
         if self._y is not None:
             label = self._y[idx]
-            return image, label
-        return image
+            return image, label, features
+        return image, features
+
+    def _build_features(self, df: pd.DataFrame) -> np.ndarray:
+        dense_features = [
+            "Subject Focus",
+            "Eyes",
+            "Face",
+            "Near",
+            "Action",
+            "Accessory",
+            "Group",
+            "Collage",
+            "Human",
+            "Occlusion",
+            "Info",
+            "Blur",
+        ]
+        return df[dense_features].values
 
 
 class PetfinderDataModule(LightningDataModule):
@@ -206,8 +230,9 @@ def mixup(x: torch.Tensor, y: torch.Tensor, alpha: float = 1.0):
 
 
 class Model(pl.LightningModule):
-    def __init__(self, cfg):
+    def __init__(self, cfg, fold):
         super().__init__()
+        self.__current_fold = fold
         self.cfg = cfg
         self.__build_model()
         self._criterion = eval(self.cfg.loss)()
@@ -219,36 +244,50 @@ class Model(pl.LightningModule):
             self.cfg.model.name, pretrained=True, num_classes=0, in_chans=3
         )
         num_features = self.backbone.num_features
-        self.fc = nn.Sequential(
-            nn.Dropout(0.5), nn.Linear(num_features, self.cfg.model.output_dim)
-        )
+        self.neck = nn.Linear(num_features, 128)
+        self.dropout = nn.Dropout(0.1)
+        self.head = nn.Linear(128 + 12, 1)
+        self.svr = SVR(**self.cfg.svr)
+
+    def feature_extract(self, image, features):
+        x = self.backbone(image)
+        x = self.neck(x)
+        x = self.dropout(x)
+        x = torch.cat([x, features], dim=1)
+        return x
 
     def forward(self, image, features):
-        f = self.backbone(image)
-        out = self.fc(f)
+        x = self.feature_extract(image, features)
+        out = self.head(x)
         return out
 
     def training_step(self, batch, batch_idx):
         loss, pred, labels = self.__share_step(batch, "train")
-        return {"loss": loss, "pred": pred, "labels": labels}
+        images, _, features = batch
+        return {
+            "loss": loss,
+            "pred": pred,
+            "labels": labels,
+        }
 
     def validation_step(self, batch, batch_idx):
-        loss, pred, labels = self.__share_step(batch, "val")
+        _, pred, labels = self.__share_step(batch, "val")
+        images, _, features = batch
         return {"pred": pred, "labels": labels}
 
     def __share_step(self, batch, mode):
-        images, labels = batch
+        images, labels, features = batch
         labels = labels.float() / 100.0
         images = self.transform[mode](images)
 
         if torch.rand(1)[0] < 0.5 and mode == "train":
             mix_images, target_a, target_b, lam = mixup(images, labels, alpha=0.5)
-            logits = self.forward(mix_images).squeeze(1)
+            logits = self.forward(mix_images, features).squeeze(1)
             loss = self._criterion(logits, target_a) * lam + (
                 1 - lam
             ) * self._criterion(logits, target_b)
         else:
-            logits = self.forward(images).squeeze(1)
+            logits = self.forward(images, features).squeeze(1)
             loss = self._criterion(logits, labels)
 
         pred = logits.sigmoid().detach().cpu() * 100.0
@@ -321,7 +360,7 @@ def train(config):
         train_df = df.loc[train_idx].reset_index(drop=True)
         val_df = df.loc[val_idx].reset_index(drop=True)
         datamodule = PetfinderDataModule(train_df, val_df, config)
-        model = Model(config)
+        model = Model(config, fold)
         earystopping = EarlyStopping(monitor="val_loss")
         lr_monitor = callbacks.LearningRateMonitor()
         loss_checkpoint = callbacks.ModelCheckpoint(
@@ -343,6 +382,15 @@ def train(config):
             **config.trainer,
         )
         trainer.fit(model, datamodule=datamodule)
+
+        print(f" ### start to train svr on fold{fold} ### ")
+        train_svr(
+            model,
+            fold,
+            config,
+            datamodule.train_dataloader(),
+            datamodule.val_dataloader(),
+        )
 
         # analysis of model
         # class_activation_map(train_df, val_df, fold)
@@ -423,24 +471,85 @@ def visualize_result(config, fold: int):
         os.makedirs(save_path, exist_ok=True)
     save_path = os.path.join(save_path, "cv_results.csv")
     if fold == 0:
-        cv_df = pd.DataFrame({"fold_0": min(scalars["val_loss"])})
+        cv_df = pd.DataFrame({"fold_0": [min(scalars["val_loss"])]})
     else:
         cv_df = pd.read_csv(save_path)
         cv_df[f"fold_{fold}"] = min(scalars["val_loss"])
     cv_df.to_csv(save_path, index=False)
 
 
-def predict(model, test_dataloader, config, transform):
+def load_cuml_model(model_path):
+    return load(model_path)
+
+
+def evaluation_func(preds, ground_truth):
+    return np.sqrt(((preds - ground_truth) ** 2).mean())
+
+
+def prepare_data(model, dataloader, mode, config):
+    assert mode in {"train", "val"}
+    model = model.to(config.device)
+    input = []
+    ground_truth = []
+    for (img, gt, features) in tqdm(dataloader):
+        img = get_default_transforms()[mode](img)
+        img = img.to(config.device)
+        features = features.to(config.device)
+        with torch.inference_mode():
+            extracted_features = model.feature_extract(img, features)
+        input.append(extracted_features.detach().cpu().numpy())
+        ground_truth.append(gt.numpy())
+    return np.concatenate(input), np.concatenate(ground_truth)
+
+
+def train_svr(model, fold, config, train_dataloader, val_dataloader):
+    svr = SVR(**config.svr)
+    train_input, train_gt = prepare_data(model, train_dataloader, "train", config)
+    val_input, val_gt = prepare_data(model, val_dataloader, "val", config)
+
+    svr.fit(train_input, train_gt)
+    preds = svr.predict(val_input)
+    metric = evaluation_func(preds, val_gt)
+    print("svr metric (sqrt mean loss): ", metric)
+
+    dump(
+        svr,
+        f"./output/svr/svr_{fold}.model",
+    )
+
+    del svr, train_input, train_gt, val_input, val_gt
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
+
+def svr_predict(model, svr_model, features, img):
+    with torch.inference_mode():
+        extracted_feature = model.feature_extract(img, features)
+    preds = svr_model.predict(extracted_feature)
+    return preds
+
+
+def predict(model, test_dataloader, config, transform, fold):
+    svr_preds = []
     preds = []
+    # svr_model_path = list(glob(f"../input/svr-ckpt/svr_{fold}*"))[0]
+    svr_model_path = list(glob(f"./output/svr/svr_{fold}*"))[0]
+    svr_model = load_cuml_model(model_path=svr_model_path)
     for batch in tqdm(test_dataloader):
-        img = batch.to(config.device)
+        img, features = batch
+        img = img.to(config.device)
+        features = features.to(config.device)
         img = transform(img)
 
         with torch.inference_mode():
-            logits = model(img)
+            logits = model(img, features)
         preds.append(logits.sigmoid().cpu().detach().numpy() * 100.0)
-    preds = np.concatenate(preds)
-    return preds.reshape(-1)
+        svr_preds.append(svr_predict(model, svr_model, features, img))
+    preds = np.concatenate(preds).reshape(-1)
+    svr_preds = np.concatenate(svr_preds).reshape(-1)
+    preds = (preds + svr_preds) / 2
+    return preds
 
 
 def update_config(config):
@@ -450,6 +559,7 @@ def update_config(config):
     parser.add_argument("--train_fold", default=-1, type=int, nargs="*")
     parser.add_argument("--tpu")
     parser.add_argument("--tpu_cores", default=-10, type=int)
+    parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
     if args.train_fold != -1:
@@ -463,11 +573,19 @@ def update_config(config):
         config["trainer"].pop("gpus")
         print("tpu is specified with the number of", config["trainer"]["tpu_cores"])
 
+    if args.debug:
+        print(" ####### debug mode is called. ####### ")
+        config["trainer"]["limit_train_batches"] = 0.01
+        config["trainer"]["limit_val_batches"] = 0.01
+        config["epoch"] = 1
+
     return config
 
 
 def main(config):
     config = update_config(config)
+    pprint(config)
+
     if config.train:
         train(config)
 
@@ -482,7 +600,7 @@ def main(config):
         )
         for fold in range(config.n_splits):
             print("\n" + "#" * 8 + f"  Fold: {fold}  " + "#" * 8 + "\n")
-            model = Model(config).to(config.device).eval()
+            model = Model(config, fold).to(config.device).eval()
             model.load_state_dict(
                 torch.load(
                     f"./output/{config.model.name}/best_loss_{fold}.ckpt",
@@ -496,6 +614,7 @@ def main(config):
                 test_dataloader,
                 config,
                 transform=get_default_transforms()["test"],
+                fold=fold,
             )
             sub.append(predicts)
 

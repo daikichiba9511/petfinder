@@ -3,3 +3,5 @@ output/
 tmp/
 
 submission.csv
+
+*.tar.gz
