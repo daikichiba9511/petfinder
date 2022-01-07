@@ -5,13 +5,14 @@ Ref
 * https://www.kaggle.com/cdeotte/rapids-svr-boost-17-8
 """
 
-import os
 import gc
+import os
 import warnings
 from glob import glob
 from pprint import pprint
 from typing import List
 
+import cuml
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -34,7 +35,8 @@ from pytorch_lightning.callbacks.progress import ProgressBarBase
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.utilities.seed import seed_everything
 from sklearn.model_selection import StratifiedKFold
-from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+from tensorboard.backend.event_processing.event_accumulator import \
+    EventAccumulator
 from timm import create_model
 from torch.utils.data import DataLoader, Dataset
 from torchvision.io import read_image
@@ -45,10 +47,10 @@ warnings.filterwarnings("ignore")
 
 config = {
     "expname": os.path.basename(__file__).split(".")[0],
-    "train": True,
+    "train": False,
     "train_epoch": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
     # "train_epoch": [0],
-    "inference": False,
+    "inference": True,
     "device": "cuda",
     "seed": 2021,
     "root": "/content/input/petfinder-pawpularity-score/",
@@ -85,7 +87,7 @@ config = {
         "pin_memory": True,
         "drop_last": False,
     },
-    "model": {"name": "swin_large_patch4_window12_384_in22k", "output_dim": 1},
+    "model": {"name": "swin_large_patch4_window12_384_in22k", "output_dim": 1, "pretrained": True},
     "svr": {"C": 1.0, "degree": 3, "gamma": "scale", "epsilon": 0.1},
     "optimizer": {
         "name": "optim.AdamW",
@@ -241,7 +243,7 @@ class Model(pl.LightningModule):
 
     def __build_model(self):
         self.backbone = create_model(
-            self.cfg.model.name, pretrained=True, num_classes=0, in_chans=3
+            self.cfg.model.name, pretrained=self.cfg.model.pretrained, num_classes=0, in_chans=3
         )
         num_features = self.backbone.num_features
         self.neck = nn.Linear(num_features, 128)
@@ -522,11 +524,11 @@ def train_svr(model, fold, config, train_dataloader, val_dataloader):
     torch.cuda.empty_cache()
 
 
-
 def svr_predict(model, svr_model, features, img):
     with torch.inference_mode():
         extracted_feature = model.feature_extract(img, features)
-    preds = svr_model.predict(extracted_feature)
+    with cuml.using_output_type("numpy"):
+        preds = svr_model.predict(extracted_feature)
     return preds
 
 
@@ -534,7 +536,7 @@ def predict(model, test_dataloader, config, transform, fold):
     svr_preds = []
     preds = []
     # svr_model_path = list(glob(f"../input/svr-ckpt/svr_{fold}*"))[0]
-    svr_model_path = list(glob(f"./output/svr/svr_{fold}*"))[0]
+    svr_model_path = list(glob(f"./output/exp002/svr/svr_{fold}*"))[0]
     svr_model = load_cuml_model(model_path=svr_model_path)
     for batch in tqdm(test_dataloader):
         img, features = batch
@@ -548,6 +550,9 @@ def predict(model, test_dataloader, config, transform, fold):
         svr_preds.append(svr_predict(model, svr_model, features, img))
     preds = np.concatenate(preds).reshape(-1)
     svr_preds = np.concatenate(svr_preds).reshape(-1)
+    print(type(preds))
+    print(type(svr_preds))
+    print(preds.shape, " ", svr_preds.shape)
     preds = (preds + svr_preds) / 2
     return preds
 
@@ -603,7 +608,8 @@ def main(config):
             model = Model(config, fold).to(config.device).eval()
             model.load_state_dict(
                 torch.load(
-                    f"./output/{config.model.name}/best_loss_{fold}.ckpt",
+                    # f"./output/{config.model.name}/best_loss_{fold}.ckpt",
+                    f"./output/exp002/best_loss_{fold}.ckpt",
                     map_location=config.device,
                 )["state_dict"]
             )
