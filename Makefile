@@ -21,6 +21,7 @@ poetry:
 develop: # usually use this command
 	${POETRY} \
 	&& poetry install \
+	&& poe force-cuda11
 
 
 develop_no_venv:
@@ -50,3 +51,6 @@ develop_by_requirements:
 update_datasets:
 	zip -r output/sub.zip output/sub
 	kaggle datasets version -p ./output/sub -m "Updated data"
+
+pull_kaggle_image:
+	docker pull gcr.io/kaggle-gpu-images/python

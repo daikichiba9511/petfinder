@@ -5,3 +5,5 @@ tmp/
 submission.csv
 
 *.tar.gz
+
+.python-version
