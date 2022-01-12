@@ -18,6 +18,10 @@ CUML = git clone https://github.com/rapidsai/cuml.git ${CUML_HOME} \
 poetry:
 	${POETRY}
 
+set:
+	${POETRY} \
+	&& poetry isntall 
+
 develop: # usually use this command
 	${POETRY} \
 	&& poetry install \
