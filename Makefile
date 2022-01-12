@@ -20,7 +20,7 @@ poetry:
 
 set:
 	${POETRY} \
-	&& poetry isntall 
+	&& poetry isntall
 
 develop: # usually use this command
 	${POETRY} \
