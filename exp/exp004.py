@@ -396,7 +396,7 @@ def train(config):
         trainer.fit(model, datamodule=datamodule)
 
         print(f" ### start to train svr on fold{fold} ### ")
-        train_svr(
+        train_ml(
             model,
             fold,
             config,
@@ -522,7 +522,7 @@ def prepare_data(model, dataloader, mode, config):
 
 
 def train_ml(model, fold, config, train_dataloader, val_dataloader):
-    print(" ########## start to train ml heads ########## )
+    print(" ########## start to train ml heads ########## ")
 
     svr = SVR(**config.svr)
     train_input, train_gt = prepare_data(model, train_dataloader, "train", config)
