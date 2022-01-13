@@ -3,7 +3,7 @@
 echo ' ####### start to train ######## '
 
 if [ $1 = "debug" ]; then
-        python exp/exp005.py \
+        python exp/exp004.py \
                 --debug \
                 --train_fold 0
 fi
@@ -14,6 +14,6 @@ if [ $1 = "all" ]; then
 fi
 
 if [ $1 = "val" ]; then
-        python exp/exp005.py \
+        python exp/exp004.py \
                 --train_fold 0
 fi

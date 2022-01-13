@@ -395,7 +395,7 @@ def train(config):
         )
         trainer.fit(model, datamodule=datamodule)
 
-        print(f" ### start to train svr on fold{fold} ### ")
+        print(f" ### start to train ml heads on fold{fold} ### ")
         train_ml(
             model,
             fold,
