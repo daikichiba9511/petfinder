@@ -1,4 +1,5 @@
 """ exp004
+poetry run python3 -m pip install lightgbm --install-option=--gpu --install-option="--opencl-library=/usr/lib/x86_64-linux-gnu/libOpenCL.so.1"'
 
 Ref
 * https://www.kaggle.com/phalanx/train-swin-t-pytorch-lightning
@@ -14,6 +15,7 @@ from pprint import pprint
 from typing import List
 
 import cuml
+import lightgbm as lgb
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -488,7 +490,7 @@ def visualize_result(config, fold: int):
     cv_df.to_csv(save_path, index=False)
 
 
-def load_cuml_model(model_path):
+def load_ml_model(model_path):
     return load(model_path)
 
 
@@ -519,10 +521,24 @@ def prepare_data(model, dataloader, mode, config):
     return np.concatenate(input), np.concatenate(ground_truth)
 
 
-def train_svr(model, fold, config, train_dataloader, val_dataloader):
+def train_ml(model, fold, config, train_dataloader, val_dataloader):
+    print(" ########## start to train ml heads ########## )
+
     svr = SVR(**config.svr)
     train_input, train_gt = prepare_data(model, train_dataloader, "train", config)
     val_input, val_gt = prepare_data(model, val_dataloader, "val", config)
+
+    lgbm_model = train_lgbm(model, fold, config, train_input, train_gt, val_input, val_gt)
+
+    lgbm_preds = lgbm_model.predict(val_input)
+    lgbm_metrics = evaluation_func(lgbm_preds, val_gt)
+    print("lgbm metric (sqrt mean loss): ", lgbm_metrics)
+    save_path = Path("./output/lgbm")
+    save_path.mkdir(exist_ok=True, parents=True)
+    dump(
+        lgbm_model,
+        str(save_path / f"lgbm_{fold}.model"),
+    )
 
     svr.fit(train_input, train_gt)
     preds = svr.predict(val_input)
@@ -540,22 +556,44 @@ def train_svr(model, fold, config, train_dataloader, val_dataloader):
     torch.cuda.empty_cache()
 
 
-def svr_predict(model, svr_model, features, img):
+def train_lgbm(model, fold, config, train_data, train_gt, val_data, val_gt):
+    lgbm_params = {"seed": 42, "device": "gpu", "max_bin": 100}
+    lgb_train_data = lgb.Dataset(train_data, train_gt)
+    lgb_val_data = lgb.Dataset(val_data, val_gt, reference=lgb_train_data)
+
+    model = lgb.train(
+        params=lgbm_params,
+        train_set=lgb_train_data,
+        valid_sets=[lgb_train_data, lgb_val_data],
+        num_boost_round=1000,
+        early_stopping_rounds=50,
+    )
+    return model
+
+
+def ml_predict(model, svr_model, lgbm_model, features, img):
     with torch.inference_mode():
         extracted_feature = model.feature_extract(img, features)
     data = torch.cat([extracted_feature, features], axis=1).detach().cpu().numpy()
     with cuml.using_output_type("numpy"):
-        preds = svr_model.predict(data)
-    return preds
+        svr_preds = svr_model.predict(data)
+    lgbm_preds = lgbm_model.predict(data)
+    return svr_preds, lgbm_preds
 
 
-def predict(model, test_dataloader, config, transform, fold, svr_weight=0.5):
+
+def predict(model, test_dataloader, config, transform, fold, svr_weight=0.3, lgbm_weight=0.3):
     assert 0 <= svr_weight <= 1
+    assert 0 <= lgbm_weight <= 1
+    assert 0 <= svr_weight + lgbm_weight <= 1
     svr_preds = []
+    lgbm_preds = []
     preds = []
     # svr_model_path = f"../input/petfinder/exp004/output/exp002/svr/svr_{fold}.model"
     svr_model_path = f"./output/svr/svr_{fold}.model"
-    svr_model = load_cuml_model(model_path=svr_model_path)
+    lgbm_model_path = f"./output/lgbm/lgbm_{fold}.model"
+    svr_model = load_ml_model(model_path=svr_model_path)
+    lgbm_model = load_ml_model(model_path=lgbm_model_path)
     for batch in tqdm(test_dataloader):
         img, features = batch
         img = img.to(config.device)
@@ -565,13 +603,13 @@ def predict(model, test_dataloader, config, transform, fold, svr_weight=0.5):
         with torch.inference_mode():
             logits = model(img, features)
         preds.append(logits.sigmoid().cpu().detach().numpy() * 100.0)
-        svr_preds.append(svr_predict(model, svr_model, features, img))
+        _svr_preds, _lgbm_preds = ml_predict(model, svr_model, lgbm_model, features, img)
+        svr_preds.append(_svr_preds)
+        lgbm_preds.append(_lgbm_preds)
     preds = np.concatenate(preds).reshape(-1)
     svr_preds = np.concatenate(svr_preds).reshape(-1)
-    # print(type(preds))
-    # print(type(svr_preds))
-    # print(preds.shape, " ", svr_preds.shape)
-    preds = (1 - svr_weight) * preds + svr_weight * svr_preds
+    lgbm_preds = np.concatenate(lgbm_preds).reshape(-1)
+    preds = (1 - svr_weight - lgbm_weight) * preds + svr_weight * svr_preds + lgbm_weight * lgbm_preds
     return preds
 
 
