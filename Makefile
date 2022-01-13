@@ -58,3 +58,6 @@ update_datasets:
 
 pull_kaggle_image:
 	docker pull gcr.io/kaggle-gpu-images/python
+
+build_dev_image:
+	docker build -f Dockerfile -t local-kaggle-python .
