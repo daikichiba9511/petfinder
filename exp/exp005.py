@@ -68,7 +68,7 @@ config = {
         "resume_from_checkpoint": None,
         # "precision": 16,
     },
-    "transform": {"name": "get_default_transforms", "image_size": 384},
+    "transform": {"name": "get_default_transforms", "image_size": 224},
     "train_loader": {
         "batch_size": 4,
         "shuffle": True,
@@ -91,7 +91,7 @@ config = {
         "drop_last": False,
     },
     "model": {
-        "name": "swin_large_patch4_window12_384_in22k",
+        "name": "swin_large_patch4_window7_224_in22k",
         "output_dim": 1,
         "pretrained": True,
     },
