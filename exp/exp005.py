@@ -56,7 +56,7 @@ config = {
     "inference": False,
     "device": "cuda",
     "seed": 2021,
-    "root": "/content/input/petfinder-pawpularity-score/",
+    "root": "./input/petfinder-pawpularity-score/",
     "n_splits": 10,
     "epoch": 20,
     "trainer": {
@@ -91,7 +91,7 @@ config = {
         "drop_last": False,
     },
     "model": {
-        "name": "swin_large_patch4_window7_224_in22k",
+        "name": "swin_large_patch4_window7_224",
         "output_dim": 1,
         "pretrained": True,
     },
@@ -390,7 +390,7 @@ def train(config):
         trainer = pl.Trainer(
             logger=logger,
             max_epochs=config.epoch,
-            callbacks=[lr_monitor, loss_checkpoint, earystopping],
+            callbacks=[lr_monitor, loss_checkpoint], # earystopping],
             **config.trainer,
         )
         trainer.fit(model, datamodule=datamodule)
