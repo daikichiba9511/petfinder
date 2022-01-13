@@ -199,7 +199,7 @@ python-versions = ">=3.6"
 
 [[package]]
 name = "fsspec"
-version = "2021.11.1"
+version = "2022.1.0"
 description = "File-system specification"
 category = "main"
 optional = false
@@ -431,6 +431,22 @@ description = "A fast implementation of the Cassowary constraint solver"
 category = "main"
 optional = false
 python-versions = ">=3.7"
+
+[[package]]
+name = "lightgbm"
+version = "3.3.2"
+description = "LightGBM Python Package"
+category = "main"
+optional = false
+python-versions = "*"
+
+[package.dependencies]
+numpy = "*"
+scikit-learn = "!=0.22.0"
+scipy = "*"
+
+[package.extras]
+dask = ["dask[array] (>=2.0.0)", "dask[dataframe] (>=2.0.0)", "dask[distributed] (>=2.0.0)", "pandas"]
 
 [[package]]
 name = "markdown"
@@ -1161,7 +1177,7 @@ testing = ["pytest (>=4.6)", "pytest-checkdocs (>=2.4)", "pytest-flake8", "pytes
 [metadata]
 lock-version = "1.1"
 python-versions = "~3.7"
-content-hash = "cb9ee6fad31161bc88c87d02346725d85987fba4bfa09499e5f27f6d4d01de2e"
+content-hash = "a782a019eb79cc1bb25cd2110dcf8d249edfae24004dcffb9fa6a9490021d58f"
 
 [metadata.files]
 absl-py = [
@@ -1369,8 +1385,8 @@ frozenlist = [
     {file = "frozenlist-1.2.0.tar.gz", hash = "sha256:68201be60ac56aff972dc18085800b6ee07973c49103a8aba669dee3d71079de"},
 ]
 fsspec = [
-    {file = "fsspec-2021.11.1-py3-none-any.whl", hash = "sha256:bcb136caa37e1470dd8314a7d3917cb9b25dd9da44c10d36df556ab4ef038185"},
-    {file = "fsspec-2021.11.1.tar.gz", hash = "sha256:03683e606651d5e4bd9180525d57477bd5430e5dc68d2e459835dc14cecc3dd4"},
+    {file = "fsspec-2022.1.0-py3-none-any.whl", hash = "sha256:256e2be44e62430c9ca8dac2e480384b00a3c52aef4e2b0b7204163fdc861d37"},
+    {file = "fsspec-2022.1.0.tar.gz", hash = "sha256:0bdd519bbf4d8c9a1d893a50b5ebacc89acd0e1fe0045d2f7b0e0c1af5990edc"},
 ]
 future = [
     {file = "future-0.18.2.tar.gz", hash = "sha256:b1bead90b70cf6ec3f0710ae53a525360fa360d306a86583adc6bf83a4db537d"},
@@ -1513,6 +1529,13 @@ kiwisolver = [
     {file = "kiwisolver-1.3.2-pp37-pypy37_pp73-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:25405f88a37c5f5bcba01c6e350086d65e7465fd1caaf986333d2a045045a223"},
     {file = "kiwisolver-1.3.2-pp37-pypy37_pp73-win_amd64.whl", hash = "sha256:bcadb05c3d4794eb9eee1dddf1c24215c92fb7b55a80beae7a60530a91060560"},
     {file = "kiwisolver-1.3.2.tar.gz", hash = "sha256:fc4453705b81d03568d5b808ad8f09c77c47534f6ac2e72e733f9ca4714aa75c"},
+]
+lightgbm = [
+    {file = "lightgbm-3.3.2-py3-none-macosx_10_14_x86_64.macosx_10_15_x86_64.macosx_11_0_x86_64.whl", hash = "sha256:2e94bd1b3ab29d173102c9c1d80db2e27ad7e43b8ff5a74c5cb7984b37d19f45"},
+    {file = "lightgbm-3.3.2-py3-none-manylinux1_x86_64.whl", hash = "sha256:f4cba3b4f29336ad7e801cb32d9b948ea4cc5300dda650b78bcdfe36b3e2c4b2"},
+    {file = "lightgbm-3.3.2-py3-none-manylinux2014_aarch64.whl", hash = "sha256:8e788c56853316fc5d35db726d81bd002c721038c856853952287f68082e0158"},
+    {file = "lightgbm-3.3.2-py3-none-win_amd64.whl", hash = "sha256:e4f1529cad416066964f9af0efad208787861e9f2181b7f9ee7fc9bacc082d4f"},
+    {file = "lightgbm-3.3.2.tar.gz", hash = "sha256:5d25d16e77c844c297ece2044df57651139bc3c8ad8c4108916374267ac68b64"},
 ]
 markdown = [
     {file = "Markdown-3.3.6-py3-none-any.whl", hash = "sha256:9923332318f843411e9932237530df53162e29dc7a4e2b91e35764583c46c9a3"},

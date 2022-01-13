@@ -18,6 +18,7 @@ torch = "1.10.0"
 poethepoet = "*"
 matplotlib = "^3.5.1"
 seaborn = "^0.11.2"
+lightgbm = "^3.3.2"
 
 [tool.poetry.dev-dependencies]
 jupytext = "^1.11.4"
@@ -34,3 +35,5 @@ build-backend = "poetry.core.masonry.api"
 force-cuda11-190 = "poetry run python3 -m pip install torch==1.9.0+cu111 torchvision==0.10.0+cu111 torchaudio==0.9.0 -f https://download.pytorch.org/whl/torch_stable.html"
 force-cuda11 = "poetry run python3 -m pip install torch==1.10.0+cu113 torchvision==0.11.1+cu113 torchaudio==0.10.0+cu113 -f https://download.pytorch.org/whl/cu113/torch_stable.html"
 force-cuda11-lts = "poetry run python3 -m pip install torch==1.8.2+cu111 torchvision==0.9.2+cu111 torchaudio==0.8.2 -f https://download.pytorch.org/whl/lts/1.8/torch_lts.html"
+
+force-lgbm = 'poetry run python3 -m pip install lightgbm --install-option=--gpu --install-option="--opencl-library=/usr/lib/x86_64-linux-gnu/libOpenCL.so.1"'
