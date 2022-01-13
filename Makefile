@@ -52,6 +52,9 @@ poetry_export:
 develop_by_requirements:
 	for package in $(cat requirements.txt); do poetry add "${package}"; done
 
+download_datasets:
+	poetry run python ./src/tasks/fetch_datasets.py --compe_name petfinder-pawpularity-score
+
 update_datasets:
 	zip -r output/sub.zip output/sub
 	kaggle datasets version -p ./output/sub -m "Updated data"

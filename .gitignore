@@ -8,3 +8,5 @@ submission.csv
 
 .python-version
 .devcontainer
+
+__pycache__
