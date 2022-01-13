@@ -56,7 +56,7 @@ config = {
     "inference": False,
     "device": "cuda",
     "seed": 2021,
-    "root": "/content/input/petfinder-pawpularity-score/",
+    "root": "./input/petfinder-pawpularity-score/",
     "n_splits": 10,
     "epoch": 20,
     "trainer": {
@@ -373,7 +373,7 @@ def train(config):
         val_df = df.loc[val_idx].reset_index(drop=True)
         datamodule = PetfinderDataModule(train_df, val_df, config)
         model = Model(config, fold)
-        earystopping = EarlyStopping(monitor="val_loss")
+        earystopping = EarlyStopping(monitor="val_loss", patience=3)
         lr_monitor = callbacks.LearningRateMonitor()
         loss_checkpoint = callbacks.ModelCheckpoint(
             dirpath=f"./output/{config.model.name}",
@@ -531,6 +531,7 @@ def train_ml(model, fold, config, train_dataloader, val_dataloader):
     lgbm_model = train_lgbm(model, fold, config, train_input, train_gt, val_input, val_gt)
 
     lgbm_preds = lgbm_model.predict(val_input)
+    print(min(lgbm_preds), max(lgbm_preds))
     lgbm_metrics = evaluation_func(lgbm_preds, val_gt)
     print("lgbm metric (sqrt mean loss): ", lgbm_metrics)
     save_path = Path("./output/lgbm")
