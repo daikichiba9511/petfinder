@@ -7,3 +7,4 @@ submission.csv
 *.tar.gz
 
 .python-version
+.devcontainer
