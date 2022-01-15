@@ -1,6 +1,6 @@
 # petfinder
 
-this repository 793th has codes of [PetFinder.my - Pawpularity Contest](https://www.kaggle.com/c/petfinder-pawpularity-score)
+this repository has 793th codes of [PetFinder.my - Pawpularity Contest](https://www.kaggle.com/c/petfinder-pawpularity-score)
 
 submit result summary
 
