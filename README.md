@@ -1,5 +1,22 @@
 # petfinder
 
+this repository 793th has codes of [PetFinder.my - Pawpularity Contest](https://www.kaggle.com/c/petfinder-pawpularity-score)
+
+submit result summary
+
+|expname|private score|public score
+|-|-|-|
+|exp003 + svr_weight=0.2|17.14128|17.95207|
+|exp000(swin_large_384_in22k)|17.19759|17.92729|
+
+my best private score (submitted but did not select as final submit...)
+
+|expname|private score|public score
+|-|-|-|
+|exp002|17.10942|18.11023
+
+
+
 ### setup develop enviroment
 
 ```sh
